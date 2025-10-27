@@ -32,6 +32,13 @@ if TYPE_CHECKING:
 CHROMA_CLIENT = None
 COLLECTIONS = {}
 
+# ✨ 회사명 → 도메인 매핑
+DOMAIN_MAPPING = {
+    "하나카드": "금융",
+    "엘지유플러스": "통신",
+    "액티벤처": "여행"
+}
+
 
 def initialize_vector_store(
     qa_data_path: str = "./data/outputs/see_out - see_out.csv",
@@ -63,13 +70,13 @@ def initialize_vector_store(
     print(f"[Vector Store] Q&A 데이터 로드 중: {qa_data_path}")
     df_qa = pd.read_csv(qa_data_path)
     
-    # short_answer != 1.0인 것만 필터링 (긴 답변만)
-    df_filtered = df_qa[df_qa['short answer'] != 1.0].copy()
-    print(f"[Vector Store] 필터링 완료: {len(df_qa)} → {len(df_filtered)}개 (short_answer != 1.0)")
+    # ✨ short_answer == 1인 것 제외 (짧은 답변 제외)
+    df_filtered = df_qa[df_qa['short answer'] != 1].copy()
+    print(f"[Vector Store] 필터링 완료: {len(df_qa)} → {len(df_filtered)}개 (short_answer != 1)")
     
-    # 50개 샘플만 선택
-    df_sample = df_filtered.head(50)
-    print(f"[Vector Store] 샘플 선택: {len(df_sample)}개")
+    # ✨ 전체 데이터 사용 (50개 제한 제거)
+    df_sample = df_filtered
+    print(f"[Vector Store] 전체 데이터 사용: {len(df_sample)}개")
     
     # 2. 원본 상담 대화 로드
     raw_data_dict = {}
@@ -106,9 +113,18 @@ def initialize_vector_store(
         # source_id로 원본 대화 조회
         source_id = str(row['source_id'])
         conversation_text = ""
+        source = ""
+        domain = "기타"
         
         if source_id in raw_data_dict:
             raw_item = raw_data_dict[source_id]
+            
+            # ✨ source 추출
+            source = raw_item.get('source', '')
+            
+            # ✨ domain 매핑
+            domain = DOMAIN_MAPPING.get(source, "기타")
+            
             messages = raw_item.get('messages', [])
             
             # 최근 3턴만 추출 (토큰 절약)
@@ -124,12 +140,14 @@ def initialize_vector_store(
             
             conversation_text = "\n".join(conversation_lines)
         
-        # 메타데이터
+        # ✨ 메타데이터 (source, domain 추가)
         metadatas.append({
             "instruction": str(row['instruction']),
             "output": str(row['output']),
-            "conversation": conversation_text,  # 원본 대화 추가
+            "conversation": conversation_text,
             "task_category": str(row['task_category']),
+            "source": source,              # 회사명
+            "domain": domain,              # 도메인 (금융/통신/여행)
             "source_id": source_id
         })
         
@@ -149,20 +167,22 @@ def initialize_vector_store(
 
 def retrieve_examples(state: "GraphState") -> "GraphState":
     """
-    유사한 Few-shot 예시 검색 (1개만)
+    메타데이터 기반 Few-shot 예시 검색
     
     Input: GraphState
       - user_query: str
-      - query_type: "qa" | "summary" | "classification"
+      - metadata: Dict {
+          "domain": str,
+          "conversation_turns": int
+        }
     
     Process:
-      - query_type에 따라 컬렉션 선택
+      - domain으로 필터링
+      - conversation_turns에 따라 n_results 결정 (≤20: 2개, >20: 1개)
       - user_query로 유사도 검색
-      - Top-1 예시 반환
     
     Output: GraphState
       - retrieved_examples: List[Dict]
-        [{"instruction": "...", "conversation": "...", "output": "..."}]
     """
     
     global CHROMA_CLIENT, COLLECTIONS
@@ -174,37 +194,58 @@ def retrieve_examples(state: "GraphState") -> "GraphState":
             initialize_vector_store()
         
         user_query = state["user_query"]
-        query_type = state.get("query_type", "qa")
+        metadata = state.get("metadata", {})
         
-        # 해당 태스크 컬렉션 선택
-        collection_name = f"{query_type}_examples"
-        collection = COLLECTIONS.get(collection_name)
+        # 메타데이터 추출
+        domain = metadata.get("domain", "기타")
+        conversation_turns = metadata.get("conversation_turns", 0)
+        
+        # ✨ conversation_turns에 따라 검색 개수 결정
+        if conversation_turns <= 20:
+            n_results = 2  # 짧은 대화 → 예시 2개
+        else:
+            n_results = 1  # 긴 대화 → 예시 1개 (토큰 절약)
+        
+        collection = COLLECTIONS.get("qa_examples")
         
         if collection is None:
-            print(f"[Vector Store] Warning: {collection_name} 컬렉션이 없습니다.")
+            print(f"[Vector Store] Warning: qa_examples 컬렉션이 없습니다.")
             state["retrieved_examples"] = []
             return state
         
-        # 유사도 검색 (Top-1만)
-        results = collection.query(
-            query_texts=[user_query],
-            n_results=1
-        )
+        # ✨ domain 필터 적용
+        if domain != "기타":
+            # domain이 명확한 경우 필터링
+            results = collection.query(
+                query_texts=[user_query],
+                n_results=n_results,
+                where={"domain": domain}  # domain 필터
+            )
+            print(f"[Vector Store] domain='{domain}' 필터 적용")
+        else:
+            # domain이 기타인 경우 전체 검색
+            results = collection.query(
+                query_texts=[user_query],
+                n_results=n_results
+            )
+            print(f"[Vector Store] domain 필터 없음 (전체 검색)")
         
         # 결과 포맷팅
         examples = []
         if results["metadatas"] and results["metadatas"][0]:
-            for metadata in results["metadatas"][0]:
+            for metadata_item in results["metadatas"][0]:
                 examples.append({
-                    "instruction": metadata["instruction"],
-                    "conversation": metadata.get("conversation", ""),
-                    "output": metadata["output"],
-                    "task_category": metadata.get("task_category", "")
+                    "instruction": metadata_item["instruction"],
+                    "conversation": metadata_item.get("conversation", ""),
+                    "output": metadata_item["output"],
+                    "task_category": metadata_item.get("task_category", ""),
+                    "source": metadata_item.get("source", ""),
+                    "domain": metadata_item.get("domain", "")
                 })
         
         state["retrieved_examples"] = examples
         
-        print(f"[Vector Store] {query_type}에서 {len(examples)}개 예시 검색 완료")
+        print(f"[Vector Store] {len(examples)}개 예시 검색 완료 (turns={conversation_turns}, n_results={n_results})")
         
     except Exception as e:
         print(f"[Vector Store] Error: {e}")

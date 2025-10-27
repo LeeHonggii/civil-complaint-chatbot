@@ -1,7 +1,6 @@
-
 from typing import TypedDict, List, Optional, Literal, Dict, Any
 from datetime import datetime
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, START
 import uuid
 
 
@@ -23,8 +22,8 @@ class GraphState(TypedDict):
     user_query: str
     conversation_history: List[Message]  # 전체 대화 저장
     
-    # 분류
-    query_type: Optional[Literal["qa", "summary", "classification"]]
+    # ✨ 메타데이터 (새로 추가)
+    metadata: Optional[Dict[str, Any]]
     
     # 검색 (Few-shot)
     retrieved_examples: Optional[List[Dict[str, Any]]]
@@ -102,99 +101,53 @@ session_store = SessionStore()
 
 
 # ============================================================
-# 3. 노드 함수들 (실제 로직은 models/에서 import)
+# 3. 노드 함수들
 # ============================================================
 
-def classify_query_node(state: GraphState) -> GraphState:
-    """쿼리 분류 노드 (placeholder)"""
-    from models.query_classifier import classify_query
-    return classify_query(state)
+def extract_metadata_node(state: GraphState) -> GraphState:
+    """메타데이터 추출 노드"""
+    from models.metadata_extractor import extract_metadata
+    return extract_metadata(state)
 
 
 def retrieve_examples_node(state: GraphState) -> GraphState:
-    """Vector DB 검색 노드 (placeholder)"""
+    """Vector DB 검색 노드"""
     from models.vector_store import retrieve_examples
     return retrieve_examples(state)
 
 
-def qa_model_node(state: GraphState) -> GraphState:
-    """QA 모델 노드 (placeholder)"""
-    from models.qa_model import qa_model
-    return qa_model(state)
-
-
-def summary_model_node(state: GraphState) -> GraphState:
-    """요약 모델 노드 (placeholder)"""
-    from models.summary_model import summary_model
-    return summary_model(state)
-
-
-def classification_model_node(state: GraphState) -> GraphState:
-    """분류 모델 노드 (placeholder)"""
-    from models.classification_model import classification_model
-    return classification_model(state)
+def unified_counselor_node(state: GraphState) -> GraphState:
+    """통합 상담 모델 노드"""
+    from models.unified_counselor import unified_counselor
+    return unified_counselor(state)
 
 
 # ============================================================
-# 4. 라우팅 함수
-# ============================================================
-
-def route_by_query_type(state: GraphState) -> str:
-    """query_type에 따라 라우팅"""
-    query_type = state.get("query_type", "qa")
-    
-    if query_type == "summary":
-        return "summary_model"
-    elif query_type == "classification":
-        return "classification_model"
-    else:  # qa (기본값)
-        return "retrieve_examples"
-
-
-# ============================================================
-# 5. 그래프 구조 정의
+# 4. 그래프 구조 정의 (단순화)
 # ============================================================
 
 def create_graph() -> StateGraph:
-    """LangGraph 생성 및 구조 정의"""
+    """LangGraph 생성 및 구조 정의 (3개 노드)"""
     
     # 그래프 초기화
     workflow = StateGraph(GraphState)
     
-    # 노드 추가
-    workflow.add_node("classify_query", classify_query_node)
+    # ✨ 노드 3개만!
+    workflow.add_node("extract_metadata", extract_metadata_node)
     workflow.add_node("retrieve_examples", retrieve_examples_node)
-    workflow.add_node("qa_model", qa_model_node)
-    workflow.add_node("summary_model", summary_model_node)
-    workflow.add_node("classification_model", classification_model_node)
+    workflow.add_node("unified_counselor", unified_counselor_node)
     
-    # 시작점
-    workflow.set_entry_point("classify_query")
-    
-    # 조건부 라우팅
-    workflow.add_conditional_edges(
-        "classify_query",
-        route_by_query_type,
-        {
-            "retrieve_examples": "retrieve_examples",  # qa 경로
-            "summary_model": "summary_model",
-            "classification_model": "classification_model"
-        }
-    )
-    
-    # QA 경로: 검색 → 모델
-    workflow.add_edge("retrieve_examples", "qa_model")
-    
-    # 종료 엣지
-    workflow.add_edge("qa_model", END)
-    workflow.add_edge("summary_model", END)
-    workflow.add_edge("classification_model", END)
+    # ✨ 순차 실행 (분기 없음)
+    workflow.set_entry_point("extract_metadata")
+    workflow.add_edge("extract_metadata", "retrieve_examples")
+    workflow.add_edge("retrieve_examples", "unified_counselor")
+    workflow.add_edge("unified_counselor", END)
     
     return workflow.compile()
 
 
 # ============================================================
-# 6. 헬퍼 함수
+# 5. 헬퍼 함수
 # ============================================================
 
 def initialize_state(
@@ -219,7 +172,7 @@ def initialize_state(
     state: GraphState = {
         "user_query": user_query,
         "conversation_history": conversation_history,
-        "query_type": None,
+        "metadata": None,  # ✨ 추가
         "retrieved_examples": None,
         "recent_context": recent_context,
         "model_response": None,
@@ -249,7 +202,7 @@ def finalize_state(state: GraphState):
 
 
 # ============================================================
-# 7. 실행 함수
+# 6. 실행 함수
 # ============================================================
 
 def run_graph(
@@ -269,7 +222,7 @@ def run_graph(
         {
             "response": 모델 응답,
             "session_id": 세션 ID,
-            "query_type": 분류 타입,
+            "metadata": 메타데이터,
             "error": 에러 메시지 (있을 경우)
         }
     """
@@ -291,7 +244,8 @@ def run_graph(
         return {
             "response": final_state.get("model_response", "응답 생성 실패"),
             "session_id": final_state["session_id"],
-            "query_type": final_state.get("query_type", "unknown"),
+            "metadata": final_state.get("metadata"),
+            "retrieved_examples": final_state.get("retrieved_examples"),  # ✨ 추가
             "error": final_state.get("error")
         }
     
@@ -299,13 +253,14 @@ def run_graph(
         return {
             "response": f"오류 발생: {str(e)}",
             "session_id": session_id,
-            "query_type": None,
+            "metadata": None,
+            "retrieved_examples": None,  # ✨ 추가
             "error": str(e)
         }
 
 
 # ============================================================
-# 8. 유틸리티 함수
+# 7. 유틸리티 함수
 # ============================================================
 
 def format_conversation_history(history: List[Message]) -> str:
@@ -339,7 +294,7 @@ if __name__ == "__main__":
     result1 = run_graph("카드 분실 신고하려고요")
     print(f"응답: {result1['response']}")
     print(f"세션 ID: {result1['session_id']}")
-    print(f"쿼리 타입: {result1['query_type']}\n")
+    print(f"메타데이터: {result1['metadata']}\n")
     
     # 2. 같은 세션에서 후속 질문
     print("2️⃣ 후속 질문 (같은 세션)")
@@ -355,8 +310,3 @@ if __name__ == "__main__":
     history = session_store.get_conversation_history(result1['session_id'])
     print(format_conversation_history(history))
     print(f"\n총 {len(history)}턴의 대화")
-    
-    # 4. 최근 컨텍스트만 확인
-    print("\n4️⃣ 최근 컨텍스트 (윈도우 크기: 4)")
-    recent = session_store.get_recent_context(result1['session_id'], window_size=4)
-    print(format_conversation_history(recent))

@@ -14,10 +14,10 @@
 3. [시스템 아키텍처](#-시스템-아키텍처)
 4. [파일 구조](#-파일-구조)
 5. [데이터 구조](#-데이터-구조)
-6. [태스크별 입출력](#-태스크별-입출력)
+6. [모듈별 상세 설명](#-모듈별-상세-설명)
 7. [설치 및 실행](#-설치-및-실행)
 8. [사용 방법](#-사용-방법)
-9. [향후 계획](#-향후-계획)
+
 
 ---
 
@@ -28,8 +28,9 @@
 
 ### 핵심 기능
 - ✅ **멀티턴 대화 지원**: 최근 8턴 맥락 유지 (슬라이딩 윈도우)
-- ✅ **3가지 태스크 처리**: 질의응답(QA), 요약(Summary), 분류(Classification)
-- ✅ **Few-shot Learning**: Vector DB를 활용한 유사 예시 검색
+- ✅ **도메인 자동 분류**: 금융/통신/여행 도메인 자동 인식
+- ✅ **동적 Few-shot Learning**: 대화 길이에 따라 예시 개수 조정 (1-2개)
+- ✅ **메타데이터 기반 검색**: 도메인 필터링으로 정확한 예시 검색
 - ✅ **세션 관리**: 대화별 독립적인 세션 저장
 - ✅ **실시간 응답**: Streamlit 기반 대화형 UI
 
@@ -43,12 +44,12 @@
 
 ## ✨ 주요 기능
 
-### 1. 자동 쿼리 분류
-사용자 질문을 분석하여 자동으로 적절한 태스크로 라우팅
+### 1. 도메인 자동 분류
+사용자 질문과 대화 맥락을 분석하여 자동으로 도메인 결정
 ```
-"카드 분실 시점은?" → QA
-"지금까지 뭘 얘기했어?" → Summary
-"이건 무슨 민원이야?" → Classification
+"카드 분실했어요" → 금융
+"요금제 변경하고 싶어요" → 통신
+"호텔 예약 가능한가요?" → 여행
 ```
 
 ### 2. 멀티턴 대화 맥락 유지
@@ -60,13 +61,21 @@
 상담사: 어제 분실하신 카드 재발급 도와드리겠습니다.
 ```
 
-### 3. Few-shot 예시 활용
-유사한 상담 사례를 검색하여 정확한 답변 생성
+### 3. 동적 Few-shot 예시 활용
+대화 길이에 따라 예시 개수 자동 조정
 ```
-[유사 예시]
-상담 대화: 고객이 해외에서 카드 사용...
-질문: 고객은 무엇을 요청했나?
-답변: 카드 정지 해제
+대화 20턴 이하 → Few-shot 예시 2개 활용
+대화 20턴 초과 → Few-shot 예시 1개 활용 (토큰 절약)
+```
+
+### 4. 도메인 기반 예시 검색
+도메인 필터링으로 관련성 높은 예시만 검색
+```
+[금융 도메인 질문]
+→ 금융 관련 예시만 검색 (카드, 결제, 포인트 등)
+
+[통신 도메인 질문]
+→ 통신 관련 예시만 검색 (요금제, 데이터 등)
 ```
 
 ---
@@ -80,29 +89,25 @@
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
-│              Query Classifier                           │
-│  - GPT-4o-mini로 쿼리 타입 분류                          │
-│  - "qa" | "summary" | "classification"                  │
+│            Metadata Extractor                           │
+│  - 도메인 분류 (금융/통신/여행/기타)                       │
+│  - 대화 턴 수 계산                                       │
+│  - 최근 4턴 맥락 고려                                     │
 └─────────────────────────────────────────────────────────┘
                           ↓
-            ┌─────────────┼─────────────┐
-            ↓             ↓             ↓
-    ┌──────────┐  ┌──────────┐  ┌──────────┐
-    │    QA    │  │   요약    │  │   분류    │
-    └──────────┘  └──────────┘  └──────────┘
-         ↓             ↓             ↓
-         │      ┌──────┴──────┐      │
-         │      ↓             ↓      │
-         │  Vector DB     Vector DB  │
-         │  (예시 검색)   (예시 검색) │
-         │      ↓             ↓      │
-         │  Few-shot      Few-shot   │
-         │  Prompt        Prompt     │
-         └──────┼─────────┼──────────┘
-                ↓
 ┌─────────────────────────────────────────────────────────┐
-│           GPT-4o-mini (추후 파인튜닝 모델)                │
-│           + 멀티턴 맥락 유지 (슬라이딩 윈도우)              │
+│              Vector Store                               │
+│  - 도메인 필터링 검색                                     │
+│  - 대화 길이별 예시 개수 조정                             │
+│    · ≤20턴: 2개 예시                                    │
+│    · >20턴: 1개 예시                                    │
+└─────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────┐
+│           Unified Counselor                             │
+│  - Few-shot 예시 활용                                    │
+│  - 멀티턴 맥락 기반 답변 생성                             │
+│  - 메타데이터 정보 포함                                   │
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
@@ -132,15 +137,13 @@ project/
 │
 ├── models/                          # 노드 모듈
 │   ├── __init__.py                 # 패키지 초기화
-│   ├── query_classifier.py         # 쿼리 분류 노드
-│   ├── vector_store.py             # Vector DB 검색 노드
-│   ├── qa_model.py                 # 질의응답 노드
-│   ├── summary_model.py            # 요약 노드
-│   └── classification_model.py     # 분류 노드
+│   ├── metadata_extractor.py       # 메타데이터 추출 노드 (도메인 분류 + 턴 수 계산)
+│   ├── vector_store.py             # Vector DB 검색 노드 (도메인 필터링 + 동적 예시)
+│   └── unified_counselor.py        # 통합 상담 모델 노드 (QA 처리)
 │
 ├── data/                            # 데이터
 │   ├── outputs/
-│   │   └── see_out - see_out.csv   # Q&A 데이터 (50개 샘플)
+│   │   └── see_out - see_out.csv   # Q&A 데이터 (전체 사용)
 │   └── raw_data_messages.jsonl     # 원본 상담 대화 (9,773건)
 │
 ├── .env                             # 환경 변수 (OPENAI_API_KEY)
@@ -170,7 +173,7 @@ source_id,file_id,task_category,instruction,object_key,object,short answer,outpu
 
 **사용 방식**:
 - `short answer != 1.0`인 데이터만 사용 (긴 답변)
-- 50개 샘플 선택
+- 전체 데이터 사용 (필터링 후 모두 활용)
 - Vector DB에 저장
 
 ---
@@ -196,6 +199,7 @@ source_id,file_id,task_category,instruction,object_key,object,short answer,outpu
 
 **주요 필드**:
 - `source_id`: 고유 ID (see_out.csv와 매칭)
+- `source`: 회사명 (하나카드/엘지유플러스/액티벤처)
 - `messages`: 대화 턴 배열
   - `user`: 고객 메시지
   - `assistance`: 상담사 메시지
@@ -204,175 +208,15 @@ source_id,file_id,task_category,instruction,object_key,object,short answer,outpu
 - `source_id`로 Q&A 데이터와 조인
 - 최근 3턴(6개 메시지)만 추출
 - Few-shot 예시의 맥락으로 활용
+- `source` → 도메인 매핑 (하나카드→금융, 엘지유플러스→통신, 액티벤처→여행)
 
 ---
 
-## 🔧 태스크별 입출력
+## 🔧 모듈별 상세 설명
 
-### 1️⃣ Query Classifier (쿼리 분류)
+### GraphState (graph.py)
 
-**Input (GraphState)**:
-```python
-{
-    "user_query": "카드 분실 시점은?",
-    "recent_context": [
-        {"role": "user", "content": "카드 분실했어요", "timestamp": "..."},
-        {"role": "assistant", "content": "언제 분실하셨나요?", "timestamp": "..."}
-    ]
-}
-```
-
-**Process**:
-- LangChain Structured Output 사용
-- GPT-4o-mini 호출 (temperature=0)
-- 3가지 타입 중 분류
-
-**Output (GraphState)**:
-```python
-{
-    "query_type": "qa"  # "qa" | "summary" | "classification"
-}
-```
-
----
-
-### 2️⃣ Vector Store (예시 검색)
-
-**Input (GraphState)**:
-```python
-{
-    "user_query": "고객은 무엇을 요청했어?",
-    "query_type": "qa"
-}
-```
-
-**Process**:
-- ChromaDB 유사도 검색
-- Top-1 예시 반환
-- source_id로 원본 대화 조인 (최근 3턴)
-
-**Output (GraphState)**:
-```python
-{
-    "retrieved_examples": [
-        {
-            "instruction": "고객은 무엇을 요구하고 있지?",
-            "conversation": "고객: 카드 분실했어요\n상담사: 언제 분실하셨나요?...",
-            "output": "정지 카드 해제",
-            "task_category": "의문사형",
-            "source_id": "200001"
-        }
-    ]
-}
-```
-
----
-
-### 3️⃣ QA Model (질의응답)
-
-**Input (GraphState)**:
-```python
-{
-    "user_query": "카드 분실 시점은?",
-    "recent_context": [최근 8턴 대화],
-    "retrieved_examples": [Few-shot 예시 1개]
-}
-```
-
-**Process**:
-```
-프롬프트 구성:
-┌─────────────────────────────────┐
-│ [예시]                           │
-│ 상담 대화:                       │
-│ 고객: ...                        │
-│ 상담사: ...                      │
-│                                 │
-│ 질문: 고객은 무엇을 요청했어?     │
-│ 답변: 정지 카드 해제             │
-├─────────────────────────────────┤
-│ # 이전 대화 맥락:                │
-│ 고객: 카드 분실했어요             │
-│ 상담사: 언제 분실하셨나요?        │
-├─────────────────────────────────┤
-│ # 현재 질문:                     │
-│ 고객: 어제요                     │
-│                                 │
-│ 상담사:                          │
-└─────────────────────────────────┘
-```
-
-**Output (GraphState)**:
-```python
-{
-    "model_response": "어제 분실하신 카드 재발급을 도와드리겠습니다."
-}
-```
-
-**API**:
-- Model: `gpt-4o-mini` (추후 파인튜닝 모델로 변경 예정)
-- Temperature: `0.3`
-
----
-
-### 4️⃣ Summary Model (요약)
-
-**Input (GraphState)**:
-```python
-{
-    "conversation_history": [전체 대화 히스토리],
-    "retrieved_examples": [요약 예시 2개 (옵션)]
-}
-```
-
-**Process**:
-- 전체 대화를 텍스트로 변환
-- 3-5문장으로 요약
-
-**Output (GraphState)**:
-```python
-{
-    "model_response": "고객이 해외에서 카드 분실을 신고하고, 문자 인증 어려움으로 인해 대체 인증 방법을 안내받았습니다. 카드 재발급 절차를 안내받았습니다."
-}
-```
-
-**API**:
-- Model: `gpt-4o-mini` (추후 파인튜닝 모델로 변경 예정)
-- Temperature: `0.3`
-
----
-
-### 5️⃣ Classification Model (분류)
-
-**Input (GraphState)**:
-```python
-{
-    "user_query": "이건 무슨 민원이야?",
-    "recent_context": [최근 대화],
-    "retrieved_examples": [분류 예시 3개]
-}
-```
-
-**Process**:
-- 대화 내용을 분석하여 유형 분류
-- 가능한 카테고리:
-  - 상담 요건: "단일 요건 민원", "다수 요건 민원"
-  - 상담 주제: "카드 분실/도난", "요금 문의", "서비스 신청" 등
-
-**Output (GraphState)**:
-```python
-{
-    "model_response": "단일 요건 민원 - 카드 분실/도난"
-}
-```
-
-**API**:
-- Model: `gpt-4o-mini` (추후 파인튜닝 모델로 변경 예정)
-- Temperature: `0.1`
-
----
-
-## 📦 GraphState 전체 구조
+전체 상태를 관리하는 중앙 데이터 구조
 
 ```python
 class Message(TypedDict):
@@ -389,8 +233,8 @@ class GraphState(TypedDict):
     user_query: str                      # 현재 사용자 질문
     conversation_history: List[Message]  # 전체 대화 히스토리
     
-    # 분류
-    query_type: Optional[Literal["qa", "summary", "classification"]]
+    # 메타데이터 (새로 추가)
+    metadata: Optional[Dict[str, Any]]   # {"domain": str, "conversation_turns": int}
     
     # 검색
     retrieved_examples: Optional[List[Dict[str, Any]]]
@@ -405,6 +249,167 @@ class GraphState(TypedDict):
     session_id: str                      # 세션 ID (UUID)
     error: Optional[str]                 # 에러 메시지
 ```
+
+---
+
+### 1️⃣ Metadata Extractor (metadata_extractor.py)
+
+**역할**: 사용자 질문 분석 및 메타데이터 추출
+
+**Input**:
+```python
+{
+    "user_query": "카드 분실했어요",
+    "recent_context": [최근 4턴],
+    "conversation_history": [전체 대화]
+}
+```
+
+**Process**:
+1. `conversation_turns` 계산 (전체 대화 길이)
+2. LLM으로 도메인 분류 (금융/통신/여행/기타)
+3. 최근 4턴 맥락 고려하여 도메인 결정
+
+**Output**:
+```python
+{
+    "metadata": {
+        "domain": "금융",              # 금융/통신/여행/기타
+        "conversation_turns": 3         # 대화 턴 수
+    }
+}
+```
+
+**도메인 분류 기준**:
+- **금융**: 카드 관련, 결제/포인트, 계좌 관련
+- **통신**: 요금제, 서비스(통화/문자/데이터), 단말기
+- **여행**: 예약, 일정, 서비스(픽업/체크아웃)
+- **기타**: 위 3가지에 속하지 않는 경우
+
+**API**:
+- Model: `gpt-4o-mini`
+- Temperature: `0` (일관성 있는 분류)
+- Structured Output: Pydantic 사용
+
+---
+
+### 2️⃣ Vector Store (vector_store.py)
+
+**역할**: 도메인 기반 Few-shot 예시 검색
+
+**Input**:
+```python
+{
+    "user_query": "카드 분실 시점은?",
+    "metadata": {
+        "domain": "금융",
+        "conversation_turns": 15
+    }
+}
+```
+
+**Process**:
+1. `conversation_turns`에 따라 검색 개수 결정
+   - ≤20턴: `n_results=2` (예시 2개)
+   - >20턴: `n_results=1` (예시 1개, 토큰 절약)
+2. `domain` 필터 적용하여 관련 예시만 검색
+3. ChromaDB 유사도 검색
+4. `source_id`로 원본 대화 조인 (최근 3턴)
+
+**Output**:
+```python
+{
+    "retrieved_examples": [
+        {
+            "instruction": "고객은 무엇을 요구하고 있지?",
+            "conversation": "고객: 카드 분실했어요\n상담사: 언제...",
+            "output": "정지 카드 해제",
+            "task_category": "의문사형",
+            "source": "하나카드",
+            "domain": "금융"
+        }
+    ]
+}
+```
+
+**도메인 매핑**:
+```python
+DOMAIN_MAPPING = {
+    "하나카드": "금융",
+    "엘지유플러스": "통신",
+    "액티벤처": "여행"
+}
+```
+
+**특징**:
+- 전체 데이터 사용 (short answer != 1인 모든 데이터)
+- 도메인이 "기타"인 경우 필터링 없이 전체 검색
+- 메타데이터 정보 포함 (domain, source, task_category)
+
+---
+
+### 3️⃣ Unified Counselor (unified_counselor.py)
+
+**역할**: 통합 상담 모델 (QA 처리)
+
+**Input**:
+```python
+{
+    "user_query": "어제요",
+    "recent_context": [최근 8턴],
+    "retrieved_examples": [Few-shot 1-2개]
+}
+```
+
+**Process**:
+```
+프롬프트 구성:
+┌─────────────────────────────────┐
+│ [시스템 프롬프트]                 │
+│ - 답변 원칙 6가지                │
+├─────────────────────────────────┤
+│ [유사 예시 1-2개]                │
+│ 메타데이터:                      │
+│   - 도메인: 금융                 │
+│   - 질문 유형: 의문사형           │
+│   - 출처: 하나카드               │
+│                                 │
+│ 상담 대화:                       │
+│ 고객: ...                        │
+│ 상담사: ...                      │
+│                                 │
+│ 질문: 고객은 무엇을 요청했어?     │
+│ 답변: 정지 카드 해제             │
+├─────────────────────────────────┤
+│ [이전 대화 맥락]                 │
+│ 고객: 카드 분실했어요             │
+│ 상담사: 언제 분실하셨나요?        │
+├─────────────────────────────────┤
+│ [현재 질문]                      │
+│ 고객: 어제요                     │
+│                                 │
+│ 상담사:                          │
+└─────────────────────────────────┘
+```
+
+**Output**:
+```python
+{
+    "model_response": "어제 분실하신 카드 재발급을 도와드리겠습니다."
+}
+```
+
+**답변 원칙**:
+1. 구체적이고 명확한 답변 제공
+2. 이전 대화 맥락을 고려하여 자연스럽게 답변
+3. 유사 예시를 참고하되, 현재 상황에 맞게 답변
+4. 정보가 불확실하면 "확인이 필요합니다" 안내
+5. 친근하고 자연스러운 말투
+6. 간결하게 답변 (불필요한 설명 자제)
+
+**API**:
+- Model: `gpt-4o-mini` (추후 파인튜닝 모델로 변경 예정)
+- Temperature: `0.3`
 
 ---
 
@@ -475,34 +480,56 @@ streamlit run main.py
 streamlit run main.py
 ```
 - Vector Store가 자동으로 초기화됩니다 (첫 실행시 약 3-5초 소요)
+- 전체 데이터가 로드됩니다 (short answer != 1)
 
 ---
 
 ### 2단계: 대화 시작
 
-#### 질의응답 (QA)
+#### 금융 도메인 질문
 ```
 사용자: 카드 분실했어요
 챗봇: 언제 분실하셨나요?
 사용자: 어제요
 챗봇: 어제 분실하신 카드 재발급을 도와드리겠습니다...
+
+[메타데이터]
+- 도메인: 금융
+- 대화 턴 수: 2
+- 검색된 예시: 2개 (금융 도메인 필터링)
 ```
 
-#### 요약
+#### 통신 도메인 질문
 ```
-사용자: 지금까지 뭘 얘기했어?
-챗봇: 고객이 어제 카드를 분실하여 재발급을 요청하셨습니다...
+사용자: 요금제 변경하고 싶어요
+챗봇: 어떤 요금제로 변경하시겠어요?
+
+[메타데이터]
+- 도메인: 통신
+- 검색된 예시: 2개 (통신 도메인 필터링)
 ```
 
-#### 분류
+#### 여행 도메인 질문
 ```
-사용자: 이건 무슨 민원이야?
-챗봇: 단일 요건 민원 - 카드 분실/도난
+사용자: 호텔 예약 가능한가요?
+챗봇: 네, 예약 도와드리겠습니다. 날짜와 인원을 알려주세요.
+
+[메타데이터]
+- 도메인: 여행
+- 검색된 예시: 2개 (여행 도메인 필터링)
 ```
 
 ---
 
-### 3단계: 새 대화 시작
+### 3단계: 상세 정보 확인
+
+UI의 "🔍 상세 정보" expander를 열면 다음을 확인할 수 있습니다:
+- 추출된 메타데이터 (도메인, 대화 턴 수)
+- 검색된 예시 정보 (도메인, 질문 유형, 출처)
+
+---
+
+### 4단계: 새 대화 시작
 
 사이드바에서 **"🔄 새 대화 시작"** 버튼 클릭
 - 이전 대화가 초기화됩니다
@@ -521,66 +548,10 @@ streamlit run main.py
 #### 메인 화면
 - 💬 대화 히스토리 표시
 - 📝 메시지 입력창
-- 🔍 상세 정보 (쿼리 타입 등)
+- 🔍 상세 정보 (메타데이터, 검색된 예시)
 
 ---
 
-## 🔮 향후 계획
-
-### Phase 1: 모델 파인튜닝 (예정)
-현재는 OpenAI GPT-4o-mini API를 사용하지만, 다음 단계로 **자체 파인튜닝 모델**로 교체 예정
-
-#### 파인튜닝 데이터
-
-
-#### 파인튜닝 방식
-
-
-#### 교체 방법
-각 노드의 LLM 호출 부분만 수정:
-```python
-# 현재 (API)
-llm = ChatOpenAI(model="gpt-4o-mini")
-
-# 파인튜닝 후
-llm = load_finetuned_model("models/qa_finetuned.pth")
-```
-
----
-
-### Phase 2: 성능 개선
-- [ ] Vector DB를 Persistent 모드로 변경 (디스크 저장)
-- [ ] Embedding 모델 개선 (KoSimCSE → OpenAI Embedding)
-- [ ] 더 많은 Few-shot 예시 활용 (1개 → 3개)
-- [ ] 대화 요약 기능 추가 (긴 대화 압축)
-
----
-
-### Phase 3: 배포 및 모니터링
-- [ ] Docker 컨테이너화
-- [ ] AWS/GCP 배포
-- [ ] 로깅 및 모니터링 시스템
-- [ ] A/B 테스트 (API vs 파인튜닝 모델)
-
----
-
-## 📌 주의사항
-
-### API 비용
-- OpenAI API 사용으로 **비용 발생**
-- 예상 비용 (GPT-4o-mini 기준):
-  - 입력: $0.15 / 1M tokens
-  - 출력: $0.60 / 1M tokens
-  - 일일 예상: 약 100회 대화 시 $0.5-1 정도
-
-### 데이터 개인정보
-- 상담 데이터에서 개인정보는 `▲` 기호로 마스킹 처리됨
-- 실제 운영 시 추가 보안 조치 필요
-
-### 성능 제한
-- 현재 메모리 기반 Vector DB (재시작 시 초기화)
-- 동시 접속 사용자 제한 (Streamlit 특성상)
-- 파인튜닝 모델 적용 전까지 API 의존성
 
 ---
 
@@ -589,7 +560,6 @@ llm = load_finetuned_model("models/qa_finetuned.pth")
 **팀명**: 상담랜드  
 **프로젝트 기간**: 2025년 10월  
 **기술 스택**: LangGraph, Streamlit, OpenAI, ChromaDB  
-
 
 ---
 
