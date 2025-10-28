@@ -34,9 +34,9 @@ if not st.session_state.vector_store_initialized:
         try:
             initialize_vector_store()
             st.session_state.vector_store_initialized = True
-            st.success("✅ Vector Store 초기화 완료!")
+            # 초기화 완료 메시지는 표시하지 않음 (간결하게)
         except Exception as e:
-            st.error(f"❌ Vector Store 초기화 실패: {e}")
+            st.error(f"❌ Vector Store 초기화 실패: 데이터베이스를 불러올 수 없습니다.")
             st.stop()
 
 # 사이드바

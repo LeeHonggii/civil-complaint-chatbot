@@ -1,9 +1,0 @@
-__pycache__/
-*.py[cod]
-.env
-.DS_Store
-data/
-*.csv
-*.jsonl
-chroma_db/
-*.ipynb_checkpoints/

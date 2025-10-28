@@ -18,7 +18,6 @@
 7. [설치 및 실행](#-설치-및-실행)
 8. [사용 방법](#-사용-방법)
 
-
 ---
 
 ## 🎯 프로젝트 개요
@@ -31,13 +30,14 @@
 - ✅ **도메인 자동 분류**: 금융/통신/여행 도메인 자동 인식
 - ✅ **동적 Few-shot Learning**: 대화 길이에 따라 예시 개수 조정 (1-2개)
 - ✅ **메타데이터 기반 검색**: 도메인 필터링으로 정확한 예시 검색
+- ✅ **하이브리드 Vector DB**: Pinecone/ChromaDB 자동 선택
 - ✅ **세션 관리**: 대화별 독립적인 세션 저장
 - ✅ **실시간 응답**: Streamlit 기반 대화형 UI
 
 ### 기술 스택
 - **Framework**: LangGraph (워크플로우), Streamlit (UI)
 - **LLM**: OpenAI GPT-4o-mini (추후 파인튜닝 모델로 변경 예정)
-- **Vector DB**: ChromaDB (메모리 기반)
+- **Vector DB**: Pinecone (클라우드) 또는 ChromaDB (로컬) - 자동 선택
 - **데이터**: 상담 대화 데이터 (9,773건)
 
 ---
@@ -78,6 +78,13 @@
 → 통신 관련 예시만 검색 (요금제, 데이터 등)
 ```
 
+### 5. 하이브리드 Vector Database
+Pinecone API 키 유무에 따라 자동으로 최적의 Vector DB 선택
+```
+PINECONE_API_KEY 있음 → Pinecone 사용 (클라우드, 고성능)
+PINECONE_API_KEY 없음 → ChromaDB 사용 (로컬, 간편)
+```
+
 ---
 
 ## 🏗️ 시스템 아키텍처
@@ -97,6 +104,7 @@
                           ↓
 ┌─────────────────────────────────────────────────────────┐
 │              Vector Store                               │
+│  - Pinecone 또는 ChromaDB (자동 선택)                    │
 │  - 도메인 필터링 검색                                     │
 │  - 대화 길이별 예시 개수 조정                             │
 │    · ≤20턴: 2개 예시                                    │
@@ -113,6 +121,17 @@
 ┌─────────────────────────────────────────────────────────┐
 │                    최종 답변 생성                          │
 └─────────────────────────────────────────────────────────┘
+```
+
+### Vector Database 선택 로직
+```
+환경 변수 확인
+    ↓
+PINECONE_API_KEY 있음?
+    ├─ YES → Pinecone 사용
+    │        ├─ 성공 → Pinecone으로 운영
+    │        └─ 실패 → ChromaDB로 자동 전환
+    └─ NO  → ChromaDB 사용
 ```
 
 ### 세션 관리
@@ -138,7 +157,7 @@ project/
 ├── models/                          # 노드 모듈
 │   ├── __init__.py                 # 패키지 초기화
 │   ├── metadata_extractor.py       # 메타데이터 추출 노드 (도메인 분류 + 턴 수 계산)
-│   ├── vector_store.py             # Vector DB 검색 노드 (도메인 필터링 + 동적 예시)
+│   ├── vector_store.py             # Vector DB 검색 노드 (Pinecone/ChromaDB 하이브리드)
 │   └── unified_counselor.py        # 통합 상담 모델 노드 (QA 처리)
 │
 ├── data/                            # 데이터
@@ -146,7 +165,9 @@ project/
 │   │   └── see_out - see_out.csv   # Q&A 데이터 (전체 사용)
 │   └── raw_data_messages.jsonl     # 원본 상담 대화 (9,773건)
 │
-├── .env                             # 환경 변수 (OPENAI_API_KEY)
+├── chroma_db/                       # ChromaDB 저장소 (자동 생성)
+├── .env                             # 환경 변수 (API 키)
+├── .gitignore                       # Git 제외 파일
 ├── requirements.txt                 # 의존성 패키지
 └── README.md                        # 프로젝트 문서
 ```
@@ -295,7 +316,20 @@ class GraphState(TypedDict):
 
 ### 2️⃣ Vector Store (vector_store.py)
 
-**역할**: 도메인 기반 Few-shot 예시 검색
+**역할**: 하이브리드 Vector DB로 Few-shot 예시 검색
+
+**지원 Vector DB**:
+- **Pinecone**: 클라우드 기반, 고성능, 무제한 확장
+- **ChromaDB**: 로컬 기반, 빠른 초기화, 디스크 저장
+
+**자동 선택 로직**:
+```python
+if PINECONE_API_KEY exists:
+    try Pinecone
+    if fail → fallback to ChromaDB
+else:
+    use ChromaDB
+```
 
 **Input**:
 ```python
@@ -313,7 +347,7 @@ class GraphState(TypedDict):
    - ≤20턴: `n_results=2` (예시 2개)
    - >20턴: `n_results=1` (예시 1개, 토큰 절약)
 2. `domain` 필터 적용하여 관련 예시만 검색
-3. ChromaDB 유사도 검색
+3. Vector DB 유사도 검색 (Pinecone 또는 ChromaDB)
 4. `source_id`로 원본 대화 조인 (최근 3턴)
 
 **Output**:
@@ -345,6 +379,7 @@ DOMAIN_MAPPING = {
 - 전체 데이터 사용 (short answer != 1인 모든 데이터)
 - 도메인이 "기타"인 경우 필터링 없이 전체 검색
 - 메타데이터 정보 포함 (domain, source, task_category)
+- Pinecone 실패 시 자동으로 ChromaDB 전환
 
 ---
 
@@ -419,11 +454,6 @@ DOMAIN_MAPPING = {
 
 #### 필요 패키지 설치
 ```bash
-pip install streamlit langchain langchain-openai chromadb pandas python-dotenv langgraph
-```
-
-#### 또는 requirements.txt 사용
-```bash
 pip install -r requirements.txt
 ```
 
@@ -437,6 +467,8 @@ pandas==2.1.3
 python-dotenv==1.0.0
 langgraph==0.0.20
 pydantic==2.5.0
+# Pinecone (선택)
+pinecone-client==3.0.0
 ```
 
 ---
@@ -444,9 +476,28 @@ pydantic==2.5.0
 ### 2. 환경 변수 설정
 
 프로젝트 루트에 `.env` 파일 생성:
+
+#### ChromaDB만 사용 (기본)
 ```bash
+# OpenAI API (필수)
 OPENAI_API_KEY=your_openai_api_key_here
 ```
+
+#### Pinecone 사용 (선택)
+```bash
+# OpenAI API (필수)
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Pinecone API (선택)
+PINECONE_API_KEY=your_pinecone_api_key_here
+PINECONE_CLOUD=aws
+PINECONE_REGION=us-east-1
+PINECONE_INDEX_NAME=counselor-qa
+```
+
+**Pinecone 무료 플랜 설정**:
+- `PINECONE_CLOUD=aws`
+- `PINECONE_REGION=us-east-1`
 
 ---
 
@@ -479,8 +530,9 @@ streamlit run main.py
 ```bash
 streamlit run main.py
 ```
-- Vector Store가 자동으로 초기화됩니다 (첫 실행시 약 3-5초 소요)
-- 전체 데이터가 로드됩니다 (short answer != 1)
+- Vector Store가 자동으로 초기화됩니다
+- **첫 실행**: 30-40초 (데이터 로딩)
+- **이후 실행**: 1-2초 (저장된 DB 로드)
 
 ---
 
@@ -537,21 +589,48 @@ UI의 "🔍 상세 정보" expander를 열면 다음을 확인할 수 있습니�
 
 ---
 
-### UI 기능
+## 📊 Vector DB 비교
 
-#### 사이드바
-- ✅ Vector Store 상태 표시
-- 🔄 새 대화 시작 버튼
-- 📝 현재 세션 ID
-- 💬 대화 턴 수
-
-#### 메인 화면
-- 💬 대화 히스토리 표시
-- 📝 메시지 입력창
-- 🔍 상세 정보 (메타데이터, 검색된 예시)
+| 항목 | ChromaDB | Pinecone |
+|------|----------|----------|
+| **위치** | 로컬 디스크 | 클라우드 |
+| **초기화 (첫 실행)** | 30-40초 | 30-60초 |
+| **로딩 (이후 실행)** | 1-2초 | 1-2초 |
+| **검색 속도** | 빠름 | 매우 빠름 |
+| **확장성** | 제한적 (~100만 벡터) | 무제한 |
+| **비용** | 무료 | 무료 (Starter) / 유료 |
+| **추천 환경** | 개발/프로토타입 | 프로덕션 |
 
 ---
 
+## 🔑 주요 설계 원칙
+
+### 1. 하이브리드 Vector DB
+```
+- Pinecone 우선 사용 (클라우드 안정성)
+- 실패 시 ChromaDB 자동 전환 (로컬 백업)
+- 동일한 인터페이스로 투명한 전환
+```
+
+### 2. 도메인 기반 검색
+```
+- 도메인 자동 분류 → 관련 예시만 검색
+- 검색 정확도 향상 및 토큰 절약
+```
+
+### 3. 동적 Few-shot 전략
+```
+- 대화 길이에 따라 예시 개수 조정
+- 짧은 대화: 충분한 예시 (2개)
+- 긴 대화: 토큰 절약 (1개)
+```
+
+### 4. 상태 중심 설계
+```
+- GraphState로 모든 정보 전달
+- 노드 간 느슨한 결합
+- 유지보수 용이
+```
 
 ---
 
@@ -559,7 +638,7 @@ UI의 "🔍 상세 정보" expander를 열면 다음을 확인할 수 있습니�
 
 **팀명**: 상담랜드  
 **프로젝트 기간**: 2025년 10월  
-**기술 스택**: LangGraph, Streamlit, OpenAI, ChromaDB  
+**기술 스택**: LangGraph, Streamlit, OpenAI, Pinecone/ChromaDB  
 
 ---
 
