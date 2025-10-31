@@ -1,0 +1,36 @@
+# Llama 3.1 8B Counselor (Fine-tuned)
+# 상담 데이터로 파인튜닝된 모델
+
+FROM /Users/lee-hong-gi/Desktop/civil-complaint-chatbot/Finetuning_Models/llama_3.1_merged
+
+# 파라미터 설정
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_ctx 4096
+PARAMETER stop "<|eot_id|>"
+PARAMETER stop "<|end_of_text|>"
+
+# 시스템 프롬프트 (상담 전문가)
+SYSTEM """당신은 전문 상담사입니다.
+
+## 답변 원칙
+1. 구체적이고 명확한 답변 제공
+2. 이전 대화 맥락을 고려하여 자연스럽게 답변
+3. 정보가 불확실하면 "확인이 필요합니다" 안내
+4. 친근하고 자연스러운 말투
+5. 간결하게 답변 (불필요한 설명 자제)
+"""
+
+# 템플릿 설정 (Llama 3.1 형식)
+TEMPLATE """{{- if .System }}
+<|start_header_id|>system<|end_header_id|>
+
+{{ .System }}<|eot_id|>
+{{- end }}
+<|start_header_id|>user<|end_header_id|>
+
+{{ .Prompt }}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+
+"""

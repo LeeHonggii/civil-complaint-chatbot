@@ -50,8 +50,8 @@ def _detect_vector_store_type() -> str:
 
 
 def initialize_vector_store(
-    qa_data_path: str = "./data/outputs/see_out - see_out.csv",
-    raw_data_path: str = "./data/raw_data_messages.jsonl",
+    qa_data_path: str = "./data/outputs/see_out_see_out.csv",
+    raw_data_path: str = "./data/raw_data_messages_normalized_seg_turn3.jsonl",
     force_reload: bool = False
 ):
     """
@@ -84,7 +84,9 @@ def initialize_vector_store(
                 if force_reload:
                     print(f"[Vector Store] force_reload=True, 데이터 재생성 중...")
         except Exception as e:
-            print(f"[Vector Store] Pinecone 확인 중 오류 발생")
+            print(f"[Vector Store] Pinecone 확인 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
             # ChromaDB가 이미 있으면 바로 로드하고 종료
             if _check_chromadb_exists():
                 print(f"[Vector Store] ✅ 저장된 ChromaDB 발견! 바로 로딩합니다...")
@@ -126,7 +128,7 @@ def initialize_vector_store(
     df_sample = df_filtered
     print(f"[Vector Store] 전체 데이터 사용: {len(df_sample)}개")
     
-    # 2. 원본 상담 대화 로드
+    # 2. 원본 상담 대화 로드 (새 구조)
     raw_data_dict = {}
     if os.path.exists(raw_data_path):
         print(f"[Vector Store] 원본 대화 데이터 로드 중: {raw_data_path}")
@@ -135,7 +137,9 @@ def initialize_vector_store(
             for line in f:
                 if line.strip():
                     item = json.loads(line)
-                    raw_data_dict[item['source_id']] = item
+                    # dialog_id를 키로 사용 (이전: source_id)
+                    dialog_id = item.get('dialog_id', item.get('source_id'))
+                    raw_data_dict[dialog_id] = item
         print(f"[Vector Store] 원본 대화 {len(raw_data_dict)}개 로드 완료")
     else:
         print(f"[Vector Store] Warning: {raw_data_path} 파일을 찾을 수 없습니다.")
@@ -149,37 +153,50 @@ def initialize_vector_store(
         # 검색용 텍스트 (instruction)
         doc_text = str(row['instruction'])
         documents.append(doc_text)
-        
-        # source_id로 원본 대화 조회
+
+        # source_id로 원본 대화 조회 (새 구조에서는 dialog_id와 매칭)
         source_id = str(row['source_id'])
         conversation_text = ""
         source = ""
         domain = "기타"
-        
+
         if source_id in raw_data_dict:
             raw_item = raw_data_dict[source_id]
-            
+
             # source 추출
             source = raw_item.get('source', '')
-            
+
             # domain 매핑
             domain = DOMAIN_MAPPING.get(source, "기타")
-            
-            messages = raw_item.get('messages', [])
-            
+
+            # 새 구조: context_turns + target_assistant
+            context_turns = raw_item.get('context_turns', [])
+            target_assistant = raw_item.get('target_assistant', {})
+
             # 최근 3턴만 추출 (토큰 절약)
-            recent_messages = messages[-6:] if len(messages) > 6 else messages
-            
+            recent_turns = context_turns[-3:] if len(context_turns) > 3 else context_turns
+
             # 대화 텍스트 생성
             conversation_lines = []
-            for msg in recent_messages:
-                if 'user' in msg:
-                    conversation_lines.append(f"고객: {msg['user']}")
-                elif 'assistance' in msg:
-                    conversation_lines.append(f"상담사: {msg['assistance']}")
-            
+            for turn in recent_turns:
+                # user 메시지
+                if turn.get('user'):
+                    user_content = turn['user'].get('content', '')
+                    if user_content:
+                        conversation_lines.append(f"고객: {user_content}")
+
+                # assistant 메시지 (턴 내부)
+                if turn.get('assistant'):
+                    assistant_content = turn['assistant'].get('content', '')
+                    if assistant_content:
+                        conversation_lines.append(f"상담사: {assistant_content}")
+
+            # target_assistant 추가 (마지막 답변)
+            if target_assistant and target_assistant.get('content'):
+                conversation_lines.append(f"상담사: {target_assistant['content']}")
+
             conversation_text = "\n".join(conversation_lines)
-        
+
         # 메타데이터 (source, domain 추가)
         metadatas.append({
             "instruction": str(row['instruction']),
@@ -190,7 +207,7 @@ def initialize_vector_store(
             "domain": domain,
             "source_id": source_id
         })
-        
+
         ids.append(f"qa_{idx}")
     
     # 4. Vector Store별 초기화 (Pinecone 실패 시 ChromaDB로 재시도)
@@ -338,110 +355,127 @@ def _load_pinecone():
 
 
 def _initialize_pinecone(documents: List[str], metadatas: List[Dict], ids: List[str]):
-    """Pinecone 초기화"""
-    global PINECONE_INDEX
-    
+    """Pinecone 초기화 (실패 시 ChromaDB로 fallback)"""
+    global PINECONE_INDEX, VECTOR_STORE_TYPE
+
     try:
         from pinecone import Pinecone, ServerlessSpec
         from langchain_openai import OpenAIEmbeddings
     except ImportError:
-        print("[Vector Store] Error: Pinecone 라이브러리가 설치되지 않았습니다.")
-        print("설치 명령어: pip install pinecone-client langchain-openai")
+        print("[Vector Store] ⚠️  Pinecone 라이브러리가 설치되지 않았습니다.")
+        print("[Vector Store] ChromaDB로 전환합니다...")
+        VECTOR_STORE_TYPE = "chromadb"
+        _initialize_chromadb(documents, metadatas, ids)
         return
     
-    # Pinecone 초기화
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-    
-    # 인덱스 이름
-    index_name = os.getenv("PINECONE_INDEX_NAME", "counselor-qa")
-    
-    # 인덱스 존재 확인
-    existing_indexes = [idx.name for idx in pc.list_indexes()]
-    
-    # 기존 인덱스 삭제 (force_reload 대응)
-    if index_name in existing_indexes:
-        print(f"[Vector Store] 기존 Pinecone 인덱스 '{index_name}' 삭제 중...")
-        pc.delete_index(index_name)
-        import time
-        time.sleep(5)  # 삭제 대기
-    
-    # 인덱스 생성
-    print(f"[Vector Store] Pinecone 인덱스 '{index_name}' 생성 중...")
-    
-    # Pinecone Serverless 설정
-    cloud = os.getenv("PINECONE_CLOUD", "gcp")  # gcp 또는 aws
-    region = os.getenv("PINECONE_REGION", "us-central1")  # gcp의 경우 us-central1
-    
-    pc.create_index(
-        name=index_name,
-        dimension=1536,  # OpenAI embedding 차원
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud=cloud,
-            region=region
+    try:
+        # Pinecone 초기화
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+
+        # 인덱스 이름
+        index_name = os.getenv("PINECONE_INDEX_NAME", "counselor-qa")
+
+        # 인덱스 존재 확인
+        existing_indexes = [idx.name for idx in pc.list_indexes()]
+
+        # 기존 인덱스 삭제 (force_reload 대응)
+        if index_name in existing_indexes:
+            print(f"[Vector Store] 기존 Pinecone 인덱스 '{index_name}' 삭제 중...")
+            pc.delete_index(index_name)
+            import time
+            time.sleep(5)  # 삭제 대기
+
+        # 인덱스 생성
+        print(f"[Vector Store] Pinecone 인덱스 '{index_name}' 생성 중...")
+
+        # Pinecone Serverless 설정
+        cloud = os.getenv("PINECONE_CLOUD", "gcp")  # gcp 또는 aws
+        region = os.getenv("PINECONE_REGION", "us-central1")  # gcp의 경우 us-central1
+
+        pc.create_index(
+            name=index_name,
+            dimension=1536,  # OpenAI embedding 차원
+            metric="cosine",
+            spec=ServerlessSpec(
+                cloud=cloud,
+                region=region
+            )
         )
-    )
-    print(f"[Vector Store] Pinecone 인덱스 '{index_name}' 생성 완료 (cloud={cloud}, region={region})")
-    
-    PINECONE_INDEX = pc.Index(index_name)
-    
-    # Embedding 모델
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-ada-002",
-        openai_api_key=os.getenv("OPENAI_API_KEY")
-    )
-    
-    # 배치로 업로드
-    batch_size = 100  # Pinecone 권장 배치 크기
-    total = len(documents)
-    
-    print(f"[Vector Store] Pinecone에 {total}개 벡터 업로드 중...")
-    
-    for i in range(0, total, batch_size):
-        end_idx = min(i + batch_size, total)
-        batch_docs = documents[i:end_idx]
-        batch_metas = metadatas[i:end_idx]
-        batch_ids = ids[i:end_idx]
-        
-        # Embedding 생성
-        batch_embeddings = embeddings.embed_documents(batch_docs)
-        
-        # Pinecone 업로드 형식
-        vectors = []
-        for j, (doc_id, embedding, metadata) in enumerate(zip(batch_ids, batch_embeddings, batch_metas)):
-            vectors.append({
-                "id": doc_id,
-                "values": embedding,
-                "metadata": metadata
-            })
-        
-        # 업로드
-        PINECONE_INDEX.upsert(vectors=vectors)
-        print(f"[Vector Store] Pinecone 배치 {i//batch_size + 1}: {len(vectors)}개 업로드 ({end_idx}/{total})")
-    
-    print(f"[Vector Store] Pinecone: 총 {total}개 벡터 업로드 완료")
+        print(f"[Vector Store] Pinecone 인덱스 '{index_name}' 생성 완료 (cloud={cloud}, region={region})")
+
+        PINECONE_INDEX = pc.Index(index_name)
+
+        # Embedding 모델
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-ada-002",
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
+
+        # 배치로 업로드
+        batch_size = 100  # Pinecone 권장 배치 크기
+        total = len(documents)
+
+        print(f"[Vector Store] Pinecone에 {total}개 벡터 업로드 중...")
+
+        for i in range(0, total, batch_size):
+            end_idx = min(i + batch_size, total)
+            batch_docs = documents[i:end_idx]
+            batch_metas = metadatas[i:end_idx]
+            batch_ids = ids[i:end_idx]
+
+            # Embedding 생성
+            batch_embeddings = embeddings.embed_documents(batch_docs)
+
+            # Pinecone 업로드 형식
+            vectors = []
+            for j, (doc_id, embedding, metadata) in enumerate(zip(batch_ids, batch_embeddings, batch_metas)):
+                vectors.append({
+                    "id": doc_id,
+                    "values": embedding,
+                    "metadata": metadata
+                })
+
+            # 업로드
+            PINECONE_INDEX.upsert(vectors=vectors)
+            print(f"[Vector Store] Pinecone 배치 {i//batch_size + 1}: {len(vectors)}개 업로드 ({end_idx}/{total})")
+
+        print(f"[Vector Store] Pinecone: 총 {total}개 벡터 업로드 완료")
+
+    except Exception as e:
+        print(f"[Vector Store] ⚠️  Pinecone 초기화 실패: {e}")
+        print("[Vector Store] ChromaDB로 전환합니다...")
+        VECTOR_STORE_TYPE = "chromadb"
+        _initialize_chromadb(documents, metadatas, ids)
 
 
 def retrieve_examples(state: "GraphState") -> "GraphState":
     """
     메타데이터 기반 Few-shot 예시 검색
     - Pinecone 또는 ChromaDB에서 검색
-    
+
     Input: GraphState
       - user_query: str
       - metadata: Dict {"domain": str, "conversation_turns": int}
-    
+
     Output: GraphState
       - retrieved_examples: List[Dict]
     """
     global VECTOR_STORE_TYPE, CHROMA_COLLECTION, PINECONE_INDEX
-    
+
     try:
-        # Vector Store 초기화 확인
+        # Vector Store 초기화 확인 (더 정확한 체크)
+        needs_init = False
         if VECTOR_STORE_TYPE is None:
+            needs_init = True
+        elif VECTOR_STORE_TYPE == "chromadb" and CHROMA_COLLECTION is None:
+            needs_init = True
+        elif VECTOR_STORE_TYPE == "pinecone" and PINECONE_INDEX is None:
+            needs_init = True
+
+        if needs_init:
             print("[Vector Store] 초기화되지 않음. 초기화 중...")
             initialize_vector_store()
-        
+
         user_query = state["user_query"]
         metadata = state.get("metadata", {})
         

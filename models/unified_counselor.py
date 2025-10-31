@@ -1,7 +1,8 @@
 """
-Unified Counselor Node
-- 질의응답(QA) 처리
-- Few-shot 예시 활용 (1-2개)
+Unified Counselor Node (멀티 환경 지원)
+- Mac (Ollama) / GPU (vLLM) 자동 감지
+- KV Cache / Prefix Caching으로 멀티턴 최적화
+- Few-shot 예시 활용
 - 대화 맥락 기반 답변
 
 Input: GraphState
@@ -10,63 +11,91 @@ Input: GraphState
   - retrieved_examples: List[Dict] (1-2개)
 
 Process:
+  - 환경 자동 감지
   - Few-shot 예시 포맷팅
-  - 대화 맥락 포함
+  - 대화 맥락 포함 (KV cache 최적화)
   - LLM 호출
 
 Output: GraphState
   - model_response: str
-  
 """
 
-import os
 from typing import TYPE_CHECKING, List, Dict
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+from .env_detector import detect_environment
 
 if TYPE_CHECKING:
     from graph import GraphState, Message
 
 
+# 전역 모델 인스턴스 (싱글톤)
+_model_wrapper = None
+
+
+def get_model_wrapper():
+    """환경에 맞는 모델 wrapper 반환 (싱글톤)"""
+    global _model_wrapper
+
+    if _model_wrapper is None:
+        env = detect_environment()
+
+        if env == "gpu":
+            from .vllm_wrapper import get_vllm_wrapper
+            _model_wrapper = get_vllm_wrapper()
+            print("[Unified Counselor] vLLM 모드 (Prefix Caching 활성화)")
+
+        else:  # mac
+            from .ollama_wrapper import get_ollama_wrapper
+            _model_wrapper = get_ollama_wrapper()
+            print("[Unified Counselor] Ollama 모드 (KV Cache 자동 관리)")
+
+    return _model_wrapper
+
+
 def unified_counselor(state: "GraphState") -> "GraphState":
     """
-    질의응답 모델 (단순화)
+    질의응답 모델 (멀티 환경 지원)
+    - Mac → Ollama (KV cache)
+    - GPU → vLLM (Prefix caching)
     - Few-shot 예시 활용
     - 대화 맥락 기반 답변
     """
-    
+
     try:
-        # LLM 초기화
-        llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0.3,
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-        
+        # 모델 wrapper 가져오기
+        model = get_model_wrapper()
+
         user_query = state["user_query"]
         recent_context = state.get("recent_context", [])
         retrieved_examples = state.get("retrieved_examples", [])
-        
-        # 프롬프트 생성
+
+        # 프롬프트 생성 (KV cache 최적화를 위해 구조화)
         prompt_text = build_qa_prompt(
             user_query=user_query,
             recent_context=recent_context,
             retrieved_examples=retrieved_examples
         )
-        
-        # LLM 호출
-        response = llm.invoke(prompt_text)
-        
+
+        # 모델 호출 (KV cache / Prefix caching 자동 적용)
+        response_text = model.generate(
+            prompt=prompt_text,
+            temperature=0.3,
+            top_p=0.9,
+            max_tokens=512,
+            stop=["고객:", "\n\n\n"]
+        )
+
         # 상태 업데이트
-        state["model_response"] = response.content.strip()
-        
-        print(f"[Unified Counselor] 답변 생성 완료 ({len(response.content)}자)")
-        
+        state["model_response"] = response_text
+
+        print(f"[Unified Counselor] 답변 생성 완료 ({len(response_text)}자)")
+
     except Exception as e:
         print(f"[Unified Counselor] Error: {e}")
+        import traceback
+        traceback.print_exc()
         state["model_response"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
         state["error"] = f"통합 모델 오류: {str(e)}"
-    
+
     return state
 
 
@@ -76,39 +105,16 @@ def build_qa_prompt(
     retrieved_examples: List[Dict]
 ) -> str:
     """
-    QA 프롬프트 생성
-    - Few-shot 예시 활용
-    - 최근 대화 맥락 포함
-    - 메타데이터 정보 포함
+    QA 프롬프트 생성 (KV Cache 최적화 구조)
+
+    구조:
+    1. 시스템 프롬프트 (고정) ← KV cache에서 재사용
+    2. Few-shot 예시 (고정) ← KV cache에서 재사용
+    3. 대화 맥락 (변동) ← 새로 계산
+    4. 현재 질문 (변동) ← 새로 계산
     """
-    
-    # 1. Few-shot 예시 포맷팅 (메타데이터 포함)
-    examples_text = ""
-    if retrieved_examples:
-        examples_text = "\n# 📚 유사한 상담 예시:\n"
-        for i, ex in enumerate(retrieved_examples, 1):
-            examples_text += f"\n[예시 {i}]\n"
-            
-            # ✨ 메타데이터 정보 추가
-            if ex.get('domain') or ex.get('task_category') or ex.get('source'):
-                examples_text += "메타데이터:\n"
-                if ex.get('domain'):
-                    examples_text += f"  - 도메인: {ex['domain']}\n"
-                if ex.get('task_category'):
-                    examples_text += f"  - 질문 유형: {ex['task_category']}\n"
-                if ex.get('source'):
-                    examples_text += f"  - 출처: {ex['source']}\n"
-                examples_text += "\n"
-            
-            # 상담 대화 포함
-            if ex.get('conversation'):
-                conv_preview = ex['conversation'][:300]  # 300자로 제한
-                examples_text += f"상담 대화:\n{conv_preview}...\n\n"
-            
-            examples_text += f"질문: {ex['instruction']}\n"
-            examples_text += f"답변: {ex['output']}\n"
-    
-    # 2. 시스템 프롬프트
+
+    # 1. 시스템 프롬프트 (고정 - KV cache 재사용됨)
     system_prompt = """당신은 전문 상담사입니다.
 
 ## 답변 원칙
@@ -119,22 +125,44 @@ def build_qa_prompt(
 5. 친근하고 자연스러운 말투
 6. 간결하게 답변 (불필요한 설명 자제)
 """
-    
-    # 3. 유사 예시 추가
-    if examples_text:
-        system_prompt += examples_text
-    
-    # 4. 대화 맥락 포맷팅
+
+    # 2. Few-shot 예시 포맷팅 (고정 - KV cache 재사용됨)
+    examples_text = ""
+    if retrieved_examples:
+        examples_text = "\n# 📚 유사한 상담 예시:\n"
+        for i, ex in enumerate(retrieved_examples, 1):
+            examples_text += f"\n[예시 {i}]\n"
+
+            # 메타데이터 정보 추가
+            if ex.get('domain') or ex.get('task_category') or ex.get('source'):
+                examples_text += "메타데이터:\n"
+                if ex.get('domain'):
+                    examples_text += f"  - 도메인: {ex['domain']}\n"
+                if ex.get('task_category'):
+                    examples_text += f"  - 질문 유형: {ex['task_category']}\n"
+                if ex.get('source'):
+                    examples_text += f"  - 출처: {ex['source']}\n"
+                examples_text += "\n"
+
+            # 상담 대화 포함
+            if ex.get('conversation'):
+                conv_preview = ex['conversation'][:300]
+                examples_text += f"상담 대화:\n{conv_preview}...\n\n"
+
+            examples_text += f"질문: {ex['instruction']}\n"
+            examples_text += f"답변: {ex['output']}\n"
+
+    # 3. 대화 맥락 포맷팅 (변동 - 매번 새로 계산)
     context_text = "\n## 💬 이전 대화 맥락:\n"
-    
+
     if recent_context:
         for msg in recent_context:
             role = "고객" if msg["role"] == "user" else "상담사"
             context_text += f"{role}: {msg['content']}\n"
     else:
         context_text += "(첫 대화입니다)\n"
-    
-    # 5. 현재 질문
+
+    # 4. 현재 질문 (변동 - 매번 새로 계산)
     query_text = f"\n## ❓ 현재 질문:\n고객: {user_query}\n\n상담사: "
-    
-    return system_prompt + context_text + query_text
+
+    return system_prompt + examples_text + context_text + query_text

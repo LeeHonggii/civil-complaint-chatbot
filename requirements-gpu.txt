@@ -1,0 +1,6 @@
+# GPU 환경용 (CUDA 필요)
+-r requirements-base.txt
+
+# vLLM + dependencies
+vllm==0.6.0
+langchain-openai>=0.1.0

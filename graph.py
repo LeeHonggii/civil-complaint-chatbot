@@ -1,7 +1,10 @@
 from typing import TypedDict, List, Optional, Literal, Dict, Any
 from datetime import datetime
-from langgraph.graph import StateGraph, END, START
+from langgraph.graph import StateGraph, END
 import uuid
+
+# langgraph 0.0.20에서는 START가 없으므로 None을 시작 노드로 사용
+START = None
 
 
 # ============================================================
@@ -116,10 +119,99 @@ def retrieve_examples_node(state: GraphState) -> GraphState:
     return retrieve_examples(state)
 
 
-def unified_counselor_node(state: GraphState) -> GraphState:
-    """통합 상담 모델 노드"""
-    from models.unified_counselor import unified_counselor
-    return unified_counselor(state)
+def route_by_environment(state: GraphState) -> str:
+    """환경에 따라 라우팅"""
+    from models.env_detector import detect_environment
+    env = detect_environment()
+
+    if env == "gpu":
+        print("[라우터] GPU 환경 감지 → vLLM 노드로 라우팅")
+        return "vllm"
+    else:
+        print("[라우터] Mac/CPU 환경 감지 → Ollama 노드로 라우팅")
+        return "ollama"
+
+
+def vllm_counselor_node(state: GraphState) -> GraphState:
+    """vLLM 상담 모델 노드 (GPU)"""
+    from models.vllm_wrapper import get_vllm_wrapper
+
+    print("[vLLM Counselor] 답변 생성 중 (Prefix Caching)...")
+
+    try:
+        model = get_vllm_wrapper()
+
+        user_query = state["user_query"]
+        recent_context = state.get("recent_context", [])
+        retrieved_examples = state.get("retrieved_examples", [])
+
+        # 프롬프트 생성
+        from models.unified_counselor import build_qa_prompt
+        prompt_text = build_qa_prompt(
+            user_query=user_query,
+            recent_context=recent_context,
+            retrieved_examples=retrieved_examples
+        )
+
+        # vLLM 생성
+        response_text = model.generate(
+            prompt=prompt_text,
+            temperature=0.3,
+            top_p=0.9,
+            max_tokens=512,
+            stop=["고객:", "\n\n\n"]
+        )
+
+        state["model_response"] = response_text
+        print(f"[vLLM Counselor] 답변 생성 완료 ({len(response_text)}자)")
+
+    except Exception as e:
+        print(f"[vLLM Counselor] Error: {e}")
+        state["model_response"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
+        state["error"] = f"vLLM 오류: {str(e)}"
+
+    return state
+
+
+def ollama_counselor_node(state: GraphState) -> GraphState:
+    """Ollama 상담 모델 노드 (Mac/CPU)"""
+    from models.ollama_wrapper import get_ollama_wrapper
+
+    print("[Ollama Counselor] 답변 생성 중 (KV Cache)...")
+
+    try:
+        model = get_ollama_wrapper()
+
+        user_query = state["user_query"]
+        recent_context = state.get("recent_context", [])
+        retrieved_examples = state.get("retrieved_examples", [])
+
+        # 프롬프트 생성
+        from models.unified_counselor import build_qa_prompt
+        prompt_text = build_qa_prompt(
+            user_query=user_query,
+            recent_context=recent_context,
+            retrieved_examples=retrieved_examples
+        )
+
+        # Ollama 생성
+        response_text = model.generate(
+            prompt=prompt_text,
+            temperature=0.3,
+            top_p=0.9,
+            max_tokens=512,
+            stop=["고객:", "\n\n\n"]
+        )
+
+        state["model_response"] = response_text
+        print(f"[Ollama Counselor] 답변 생성 완료 ({len(response_text)}자)")
+
+    except Exception as e:
+        print(f"[Ollama Counselor] Error: {e}")
+        state["model_response"] = "죄송합니다. 답변 생성 중 오류가 발생했습니다."
+        state["error"] = f"Ollama 오류: {str(e)}"
+
+    return state
 
 
 # ============================================================
@@ -127,22 +219,35 @@ def unified_counselor_node(state: GraphState) -> GraphState:
 # ============================================================
 
 def create_graph() -> StateGraph:
-    """LangGraph 생성 및 구조 정의 (3개 노드)"""
-    
+    """LangGraph 생성 및 구조 정의 (환경별 라우팅)"""
+
     # 그래프 초기화
     workflow = StateGraph(GraphState)
-    
-    # ✨ 노드 3개만!
+
+    # 노드 추가 (메타데이터 추출, 예시 검색, 환경별 상담사)
     workflow.add_node("extract_metadata", extract_metadata_node)
     workflow.add_node("retrieve_examples", retrieve_examples_node)
-    workflow.add_node("unified_counselor", unified_counselor_node)
-    
-    # ✨ 순차 실행 (분기 없음)
+    workflow.add_node("vllm_counselor", vllm_counselor_node)
+    workflow.add_node("ollama_counselor", ollama_counselor_node)
+
+    # 엣지 설정
     workflow.set_entry_point("extract_metadata")
     workflow.add_edge("extract_metadata", "retrieve_examples")
-    workflow.add_edge("retrieve_examples", "unified_counselor")
-    workflow.add_edge("unified_counselor", END)
-    
+
+    # ✨ 조건부 라우팅: 환경에 따라 vLLM 또는 Ollama로 분기
+    workflow.add_conditional_edges(
+        "retrieve_examples",
+        route_by_environment,
+        {
+            "vllm": "vllm_counselor",
+            "ollama": "ollama_counselor"
+        }
+    )
+
+    # 양쪽 경로 모두 END로
+    workflow.add_edge("vllm_counselor", END)
+    workflow.add_edge("ollama_counselor", END)
+
     return workflow.compile()
 
 

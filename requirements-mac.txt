@@ -1,0 +1,13 @@
+# Mac 환경용 (Apple Silicon 최적화)
+-r requirements-base.txt
+
+# Ollama Python client
+ollama>=0.1.0
+
+# Transformers + PEFT (LoRA 어댑터 로드용)
+transformers>=4.43.2
+peft>=0.17.1
+accelerate>=0.20.0
+
+# OpenAI (metadata extractor에서 사용)
+langchain-openai>=0.1.0
