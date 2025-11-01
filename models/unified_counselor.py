@@ -20,8 +20,12 @@ Output: GraphState
   - model_response: str
 """
 
-from typing import TYPE_CHECKING, List, Dict
+from typing import TYPE_CHECKING, List, Dict, Iterator
 from .env_detector import detect_environment
+import logging
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from graph import GraphState, Message
@@ -29,6 +33,13 @@ if TYPE_CHECKING:
 
 # 전역 모델 인스턴스 (싱글톤)
 _model_wrapper = None
+
+
+def reset_model_wrapper():
+    """모델 wrapper 싱글톤 초기화 (모델 변경 시 사용)"""
+    global _model_wrapper
+    _model_wrapper = None
+    logger.info("[Unified Counselor] 모델 wrapper 초기화됨")
 
 
 def get_model_wrapper():
@@ -166,3 +177,64 @@ def build_qa_prompt(
     query_text = f"\n## ❓ 현재 질문:\n고객: {user_query}\n\n상담사: "
 
     return system_prompt + examples_text + context_text + query_text
+
+
+def unified_counselor_stream(
+    user_query: str,
+    recent_context: List["Message"],
+    retrieved_examples: List[Dict]
+) -> Iterator[str]:
+    """
+    질의응답 모델 (스트리밍 버전)
+    - Mac → Ollama (KV cache)
+    - GPU → vLLM (Prefix caching)
+    - Few-shot 예시 활용
+    - 대화 맥락 기반 답변
+
+    Yields:
+        생성된 텍스트 청크
+    """
+
+    try:
+        # 모델 wrapper 가져오기
+        model = get_model_wrapper()
+
+        # 프롬프트 생성
+        prompt_text = build_qa_prompt(
+            user_query=user_query,
+            recent_context=recent_context,
+            retrieved_examples=retrieved_examples
+        )
+
+        logger.info(f"[Unified Counselor Stream] 스트리밍 답변 생성 시작")
+
+        # 스트리밍이 지원되는지 확인
+        if hasattr(model, 'generate_stream'):
+            # 스트리밍 모드로 생성
+            for chunk in model.generate_stream(
+                prompt=prompt_text,
+                temperature=0.3,
+                top_p=0.9,
+                max_tokens=512,
+                stop=["고객:", "\n\n\n"]
+            ):
+                yield chunk
+        else:
+            # 스트리밍 미지원 시 일반 생성 후 한 번에 반환
+            logger.warning(f"[Unified Counselor Stream] 스트리밍 미지원, 일반 생성 모드 사용")
+            response = model.generate(
+                prompt=prompt_text,
+                temperature=0.3,
+                top_p=0.9,
+                max_tokens=512,
+                stop=["고객:", "\n\n\n"]
+            )
+            yield response
+
+        logger.info(f"[Unified Counselor Stream] 스트리밍 답변 생성 완료")
+
+    except Exception as e:
+        logger.error(f"[Unified Counselor Stream] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        yield "죄송합니다. 답변 생성 중 오류가 발생했습니다."

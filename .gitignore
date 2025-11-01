@@ -29,3 +29,8 @@ Thumbs.db
 
 # Streamlit
 .streamlit/
+
+# Models and Data
+Finetuning_Models/
+data/
+*.gguf

@@ -1,0 +1,15 @@
+FROM /Users/lee-hong-gi/Desktop/civil-complaint-chatbot/Finetuning_Models/gemma_2_9b_merged
+
+PARAMETER temperature 0.3
+PARAMETER top_p 0.9
+PARAMETER num_ctx 4096
+PARAMETER stop "<end_of_turn>"
+PARAMETER stop "<start_of_turn>"
+
+TEMPLATE """<start_of_turn>user
+{{ if .System }}{{ .System }}
+{{ end }}{{ .Prompt }}<end_of_turn>
+<start_of_turn>model
+"""
+
+SYSTEM """당신은 전문적이고 친절한 고객 상담사입니다. 고객의 질문에 명확하고 도움이 되는 답변을 제공하세요."""

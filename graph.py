@@ -313,53 +313,89 @@ def finalize_state(state: GraphState):
 def run_graph(
     user_query: str,
     session_id: Optional[str] = None,
-    window_size: int = 8
+    window_size: int = 8,
+    stream: bool = False
 ) -> Dict[str, Any]:
     """
     그래프 실행 메인 함수
-    
+
     Args:
         user_query: 사용자 질문
         session_id: 세션 ID (None이면 새로 생성)
         window_size: 슬라이딩 윈도우 크기
-    
+        stream: 스트리밍 모드 여부
+
     Returns:
         {
-            "response": 모델 응답,
+            "response": 모델 응답 (stream=False인 경우),
+            "response_stream": 스트리밍 iterator (stream=True인 경우),
             "session_id": 세션 ID,
             "metadata": 메타데이터,
+            "retrieved_examples": 검색된 예시들,
             "error": 에러 메시지 (있을 경우)
         }
     """
-    
+
     try:
         # 1. 그래프 생성
         graph = create_graph()
-        
+
         # 2. 초기 상태 생성
         state = initialize_state(user_query, session_id, window_size)
-        
-        # 3. 그래프 실행
-        result = graph.invoke(state)
-        
-        # 4. 최종 상태 저장
-        final_state = finalize_state(result)
-        
-        # 5. 결과 반환
-        return {
-            "response": final_state.get("model_response", "응답 생성 실패"),
-            "session_id": final_state["session_id"],
-            "metadata": final_state.get("metadata"),
-            "retrieved_examples": final_state.get("retrieved_examples"),  # ✨ 추가
-            "error": final_state.get("error")
-        }
-    
+
+        # 스트리밍 모드인 경우
+        if stream:
+            # 메타데이터 추출 및 검색만 수행 (통합 모델 실행 전까지)
+            from models.metadata_extractor import extract_metadata
+            from models.vector_store import retrieve_examples
+
+            # 메타데이터 추출
+            state = extract_metadata(state)
+
+            # Vector Store 검색
+            state = retrieve_examples(state)
+
+            # 스트리밍 응답 생성
+            from models.unified_counselor import unified_counselor_stream
+
+            response_stream = unified_counselor_stream(
+                user_query=user_query,
+                recent_context=state.get("recent_context", []),
+                retrieved_examples=state.get("retrieved_examples", [])
+            )
+
+            # 결과 반환 (스트리밍 iterator 포함)
+            return {
+                "response_stream": response_stream,
+                "session_id": state["session_id"],
+                "metadata": state.get("metadata"),
+                "retrieved_examples": state.get("retrieved_examples"),
+                "error": state.get("error")
+            }
+
+        # 일반 모드
+        else:
+            # 3. 그래프 실행
+            result = graph.invoke(state)
+
+            # 4. 최종 상태 저장
+            final_state = finalize_state(result)
+
+            # 5. 결과 반환
+            return {
+                "response": final_state.get("model_response", "응답 생성 실패"),
+                "session_id": final_state["session_id"],
+                "metadata": final_state.get("metadata"),
+                "retrieved_examples": final_state.get("retrieved_examples"),
+                "error": final_state.get("error")
+            }
+
     except Exception as e:
         return {
             "response": f"오류 발생: {str(e)}",
             "session_id": session_id,
             "metadata": None,
-            "retrieved_examples": None,  # ✨ 추가
+            "retrieved_examples": None,
             "error": str(e)
         }
 

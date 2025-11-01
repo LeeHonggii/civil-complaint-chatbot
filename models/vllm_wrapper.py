@@ -17,18 +17,47 @@ class VLLMWrapper:
         self.LLM = LLM
         self.SamplingParams = SamplingParams
         self.model = None
-        # 병합된 모델 경로 사용
-        self.merged_model_path = os.getenv(
-            "FINETUNED_MODEL_PATH",
-            "./Finetuning_Models/llama_3.1_merged"
-        )
+
+        # 모델 선택
+        model_name = os.getenv("MODEL_NAME", "llama").lower()
+        use_finetuned = os.getenv("USE_FINETUNED_MODEL", "false").lower() == "true"
+
+        if model_name == "mistral":
+            if use_finetuned:
+                self.merged_model_path = os.getenv("MISTRAL_MODEL_PATH", "./Finetuning_Models/mistral_7b_merged")
+                self.model_display_name = "Mistral 7B Instruct v0.2 (파인튜닝)"
+            else:
+                self.merged_model_path = "mistralai/Mistral-7B-Instruct-v0.2"
+                self.model_display_name = "Mistral 7B Instruct v0.2 (베이스)"
+        elif model_name == "gemma":
+            if use_finetuned:
+                self.merged_model_path = os.getenv("GEMMA_MODEL_PATH", "./Finetuning_Models/gemma_2_9b_merged")
+                self.model_display_name = "Gemma 2 9B Instruct (파인튜닝)"
+            else:
+                self.merged_model_path = "google/gemma-2-9b-it"
+                self.model_display_name = "Gemma 2 9B Instruct (베이스)"
+        elif model_name == "bccard":
+            if use_finetuned:
+                self.merged_model_path = os.getenv("BCCARD_MODEL_PATH", "./Finetuning_Models/bccard_llama3_merged")
+                self.model_display_name = "BCCard Llama 3 8B (파인튜닝)"
+            else:
+                self.merged_model_path = "BCCard/Llama-3-Kor-BCCard-Finance-8B"
+                self.model_display_name = "BCCard Llama 3 8B (베이스)"
+        else:  # llama (기본값)
+            if use_finetuned:
+                self.merged_model_path = os.getenv("LLAMA_MODEL_PATH", "./Finetuning_Models/llama_3.1_merged")
+                self.model_display_name = "Llama 3.1 8B Instruct (파인튜닝)"
+            else:
+                self.merged_model_path = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+                self.model_display_name = "Llama 3.1 8B Instruct (베이스)"
 
     def load_model(self):
         """모델 로드 (한 번만 실행)"""
         if self.model is not None:
             return
 
-        print(f"[vLLM] 파인튜닝된 모델 로드 중: {self.merged_model_path}")
+        print(f"[vLLM] 파인튜닝된 모델 로드 중: {self.model_display_name}")
+        print(f"[vLLM] 경로: {self.merged_model_path}")
 
         self.model = self.LLM(
             model=self.merged_model_path,
@@ -37,7 +66,7 @@ class VLLMWrapper:
             gpu_memory_utilization=0.9,
             trust_remote_code=True
         )
-        print(f"[vLLM] 파인튜닝 모델 로드 완료! (Prefix Caching ON)")
+        print(f"[vLLM] {self.model_display_name} 로드 완료! (Prefix Caching ON)")
 
     def generate(
         self,
@@ -81,6 +110,13 @@ class VLLMWrapper:
 
 # 싱글톤 인스턴스
 _vllm_instance = None
+
+
+def reset_vllm_wrapper():
+    """vLLM Wrapper 싱글톤 초기화 (모델 변경 시 사용)"""
+    global _vllm_instance
+    _vllm_instance = None
+    print("[vLLM] 싱글톤 인스턴스 초기화됨")
 
 
 def get_vllm_wrapper() -> VLLMWrapper:

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>LangGraph 구조 - 환경별 라우팅</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                curve: 'linear',
+                nodeSpacing: 50,
+                rankSpacing: 80
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 1200px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .description {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        .description h3 {
+            margin-top: 0;
+        }
+        .description ul {
+            line-height: 1.8;
+        }
+        .feature-box {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            border-radius: 3px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 LangGraph 상담 챗봇 파이프라인 (환경별 라우팅)</h1>
+        <div class="mermaid">
+            %%{init: {'theme':'default', 'flowchart': {'curve': 'linear'}}}%%
+            graph TD
+                Start([시작]):::startClass
+                ExtractMeta[📊 extract_metadata<br/>메타데이터 추출<br/><i>domain, conversation_turns</i>]:::nodeClass
+                Retrieve[🔍 retrieve_examples<br/>Vector DB 검색<br/><i>Pinecone/ChromaDB</i>]:::nodeClass
+                Router{🎯 route_by_environment<br/>환경 감지}:::routerClass
+                VllmNode[🚀 vllm_counselor<br/>vLLM 답변 생성<br/><i>GPU + Prefix Cache</i>]:::gpuClass
+                OllamaNode[🦙 ollama_counselor<br/>Ollama 답변 생성<br/><i>Mac/CPU + KV Cache</i>]:::cpuClass
+                End([종료]):::endClass
+
+                Start --> ExtractMeta
+                ExtractMeta --> Retrieve
+                Retrieve --> Router
+                Router -->|GPU 환경| VllmNode
+                Router -->|Mac/CPU 환경| OllamaNode
+                VllmNode --> End
+                OllamaNode --> End
+
+                classDef startClass fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+                classDef nodeClass fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+                classDef routerClass fill:#fff9c4,stroke:#fbc02d,stroke-width:3px
+                classDef gpuClass fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+                classDef cpuClass fill:#ffe0b2,stroke:#ff9800,stroke-width:2px
+                classDef endClass fill:#fce4ec,stroke:#e91e63,stroke-width:2px
+        </div>
+
+        <div class="description">
+            <h3>📝 노드 설명</h3>
+            <ul>
+                <li><strong>extract_metadata</strong>: 사용자 쿼리에서 도메인(카드/대출/보험)과 대화 턴 수 추출</li>
+                <li><strong>retrieve_examples</strong>: Pinecone/ChromaDB에서 유사한 상담 예시 검색 (Few-shot)</li>
+                <li><strong>route_by_environment</strong>: 환경 감지 후 적절한 모델로 라우팅
+                    <ul>
+                        <li>GPU 감지 시 → vllm_counselor</li>
+                        <li>Mac/CPU 감지 시 → ollama_counselor</li>
+                    </ul>
+                </li>
+                <li><strong>vllm_counselor</strong>: vLLM으로 답변 생성 (Prefix Caching으로 멀티턴 최적화)</li>
+                <li><strong>ollama_counselor</strong>: Ollama로 답변 생성 (KV Cache로 멀티턴 최적화)</li>
+            </ul>
+        </div>
+
+        <div class="feature-box">
+            <h3>✨ 주요 특징</h3>
+            <ul>
+                <li><strong>조건부 라우팅</strong>: <code>add_conditional_edges()</code>로 환경별 분기 처리</li>
+                <li><strong>환경별 최적화</strong>:
+                    <ul>
+                        <li>GPU: vLLM + Prefix Caching (고성능)</li>
+                        <li>Mac/CPU: Ollama + KV Cache (경량)</li>
+                    </ul>
+                </li>
+                <li><strong>통합 프롬프트</strong>: 두 경로 모두 동일한 <code>build_qa_prompt()</code> 사용</li>
+                <li><strong>멀티턴 대화</strong>: 슬라이딩 윈도우로 최근 8-10턴 유지</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <small>브라우저에서 이 파일을 열면 다이어그램이 표시됩니다.<br>
+            스크린샷으로 캡처하거나 인쇄할 수 있습니다.</small>
+        </div>
+    </div>
+</body>
+</html>

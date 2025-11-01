@@ -27,6 +27,9 @@
 
 ### 핵심 기능
 - ✅ **멀티턴 대화 지원**: 최근 8턴 맥락 유지 (슬라이딩 윈도우)
+- ✅ **4개 모델 지원**: Llama/Mistral/Gemma/BCCard 선택 가능
+- ✅ **베이스/파인튜닝 전환**: UI 체크박스로 실시간 모델 전환
+- ✅ **스트리밍 응답**: 실시간 토큰 단위 응답 출력
 - ✅ **도메인 자동 분류**: 금융/통신/여행 도메인 자동 인식
 - ✅ **동적 Few-shot Learning**: 대화 길이에 따라 예시 개수 조정 (1-2개)
 - ✅ **메타데이터 기반 검색**: 도메인 필터링으로 정확한 예시 검색
@@ -34,12 +37,16 @@
 - ✅ **환경별 자동 라우팅**: GPU/Mac 환경 자동 감지 및 최적화
 - ✅ **KV/Prefix Cache**: 멀티턴 대화 최적화 (Ollama/vLLM)
 - ✅ **세션 관리**: 대화별 독립적인 세션 저장
-- ✅ **실시간 응답**: Streamlit 기반 대화형 UI
+- ✅ **로깅 시스템**: 모델 사용 추적 및 디버깅
 
 ### 기술 스택
 - **Framework**: LangGraph 1.0.2 (워크플로우), Streamlit (UI)
-- **LLM**:
-  - **파인튜닝 모델**: Llama 3.1 8B + LoRA (상담 데이터 기반)
+- **LLM**: 4개 모델 지원 (UI에서 선택 가능)
+  - **Llama 3.1 8B Instruct** + LoRA (메인 모델)
+  - **Mistral 7B Instruct v0.2** + LoRA
+  - **Gemma 2 9B Instruct** + LoRA
+  - **BCCard Llama 3 8B** + LoRA (하나카드 금융 특화)
+  - **베이스/파인튜닝 전환**: UI 체크박스로 실시간 전환
   - **메타데이터 추출**: OpenAI GPT-4o-mini
 - **추론 엔진**:
   - **GPU**: vLLM (Prefix Caching)

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>LangGraph 구조</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                curve: 'linear',
+                nodeSpacing: 50,
+                rankSpacing: 80
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 LangGraph 상담 챗봇 파이프라인</h1>
+        <div class="mermaid">
+            %%{init: {'theme':'default', 'flowchart': {'curve': 'linear'}}}%%
+            graph TD
+                Start([시작]):::startClass
+                Meta[📊 extract_metadata<br/>메타데이터 추출<br/><i>domain, conversation_turns</i>]:::nodeClass
+                Retrieve[🔍 retrieve_examples<br/>Few-shot 예시 검색<br/><i>Vector DB 검색</i>]:::nodeClass
+                Counselor[🤖 unified_counselor<br/>답변 생성<br/><i>vLLM or Ollama</i>]:::nodeClass
+                End([종료]):::endClass
+
+                Start --> Meta
+                Meta --> Retrieve
+                Retrieve --> Counselor
+                Counselor --> End
+
+                classDef startClass fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+                classDef nodeClass fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+                classDef endClass fill:#fce4ec,stroke:#e91e63,stroke-width:2px
+        </div>
+        <div style="margin-top: 30px; padding: 20px; background: #f9f9f9; border-radius: 5px;">
+            <h3>📝 노드 설명</h3>
+            <ul style="line-height: 1.8;">
+                <li><strong>extract_metadata</strong>: 사용자 쿼리에서 도메인과 대화 턴 수 추출</li>
+                <li><strong>retrieve_examples</strong>: Pinecone/ChromaDB에서 유사한 상담 예시 검색</li>
+                <li><strong>unified_counselor</strong>: GPU(vLLM) 또는 Mac(Ollama)로 답변 생성</li>
+            </ul>
+        </div>
+        <div style="text-align: center; margin-top: 20px; color: #666;">
+            <small>브라우저에서 열면 다이어그램이 표시됩니다. 스크린샷으로 캡처하세요!</small>
+        </div>
+    </div>
+</body>
+</html>
