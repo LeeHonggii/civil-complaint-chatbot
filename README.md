@@ -268,7 +268,7 @@ source_id,file_id,task_category,instruction,object_key,object,short answer,outpu
 
 ### 2. raw_data_messages_normalized_seg_turn3.jsonl (원본 상담 대화) 🆕
 실제 고객-상담사 대화 내용 (세그먼트 단위)
-
+.
 ```json
 {
   "dialog_id": "90001",
